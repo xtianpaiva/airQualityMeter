@@ -6,7 +6,7 @@ Detects **air particulate matter** (PM - pm1, pm2.5, pm10) concentrations with a
 
 An alternative firmware for _ESP8266 devices_ like the [NodeMCU](https://github.com/nodemcu/nodemcu-firmware) board written for [**Arduino**](https://www.arduino.cc/) on [**PlatformIO**](https://platformio.org/)
 
-[![License](https://img.shields.io/github/license/rpanfili/airQualityMeter.svg)](https://github.com/rpanfili/airQualityMeter/blob/development/LICENSE.txt) [![Build Status](https://travis-ci.com/rpanfili/airQualityMeter.svg?branch=master)](https://travis-ci.org/rpanfili/home-assistant)
+[![License](https://img.shields.io/github/license/xtianpaiva/airQualityMeter.svg)](LICENSE.txt) [![Build Status](https://travis-ci.com/xtianpaiva/airQualityMeter.svg?branch=master)](https://travis-ci.com/xtianpaiva/airQualityMeter)
 
 ### Disclaimer
 
@@ -38,7 +38,7 @@ running. Remember that you *can* do all the setup steps without the PMS sensor c
 If you are used to this kind of software you already know how easier is to manage project dependencies, custom build routine, etc but if you are not don't worry! It's really easy and this can be a good starting point to learn something new :) You only need to [install it](https://platformio.org/platformio-ide) for your favorite IDE between Atom and VSCode.
 
 #### [NOT REQUIRED] - Edit the configuration file
-If you would like it you can edit the `data/config.json` configuration file to **preload all parameters** and skip the access-point mode configuration step later.
+If you would like it you can copy `data/config.example.json` to `data/config.json` and edit it to **preload all parameters** and skip the access-point mode configuration step later. The local `config.json` file is ignored by Git so that Wi-Fi, MQTT and OTA passwords are not committed accidentally.
 If you want you can configure only some of the parameters. Remove the property or leave it empty to use default project values.
 Then you will need to upload this file into the SPI filesystem using the PlatformIO command:
 ```shell
@@ -55,13 +55,19 @@ After being flashed this application needs almost no configuration. Just to setu
 To do that power the device up using the module micro-usb port. It'll boot in Access-point mode and a new wifi ssid will be available:
 ```
 ssid: AQM-xxxxxx
-pass: stop_air_pollution
+pass: printed on the serial monitor at startup
 ```
-Connect to that and a configuration page it will be displayed to you. If it'll not happen just open the browser and go to [http://192.168.4.1](http://192.168.4.1)
+On the first boot, the firmware generates a unique access-point password and prints it at 115200 baud. Connect to the access point using that password; a configuration page will be displayed. If it does not open automatically, go to [http://192.168.4.1](http://192.168.4.1).
 
 Follow the instructions and you will configure the sensor "everyday" network!
 
-If you want you can skip this part using the `data/config.json` **configuration file**. If you are interested in it check [this paragraph about]([NOT REQUIRED] - Create configuration file)
+If you want you can skip this part using the `data/config.json` **configuration file**. See [Edit the configuration file](#not-required---edit-the-configuration-file).
+
+### Security notes
+
+- Set a unique OTA password of at least eight characters to enable OTA updates. OTA remains disabled until then.
+- MQTT credentials and measurements are sent without transport encryption. Use a trusted, isolated network until TLS support is configured for your broker.
+- The device stores its configuration in SPIFFS. Treat physical access to the device as access to its Wi-Fi, MQTT and OTA credentials.
 
 ## Usage
 
