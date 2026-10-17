@@ -69,6 +69,17 @@ If you want you can skip this part using the `data/config.json` **configuration 
 - MQTT credentials and measurements are sent without transport encryption. Use a trusted, isolated network until TLS support is configured for your broker.
 - The device stores its configuration in SPIFFS. Treat physical access to the device as access to its Wi-Fi, MQTT and OTA credentials.
 
+## Development
+
+Run the hardware-independent tests before building firmware:
+
+```shell
+pio test -e native
+pio run
+```
+
+The native tests cover port parsing and reject empty, malformed, zero and out-of-range values. The firmware build still requires a compatible ESP8266 toolchain; deploy it only after a successful build.
+
 ## Usage
 
 This are the minimal wiring that this project needs:
