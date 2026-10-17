@@ -8,6 +8,8 @@
 #include <ArduinoOTA.h>
 #include <SoftwareSerial.h>
 #include <ArduinoJson.h>
+#include <memory>
+#include <stdlib.h>
 
 /*
  * Modify this file to preload default configuration!
@@ -19,24 +21,22 @@ struct configStruct
   char wifi_ssid[32] = "";
   char wifi_password[64] = "";
   char access_point_prefix[25] = "AQM-";
-  char access_point_password[64] = "stop_air_pollution";
+  char access_point_password[64] = "";
   char mqtt_server[40] = "";
   char mqtt_port[6] = "1883";
   char mqtt_username[32] = "";
   char mqtt_password[64] = "";
   char mqtt_topic[200] = "air_quality_meter/status";
-  char ota_password[64] = "ota_password";
+  char ota_password[64] = "";
   char ota_port[6] = "8266";
 };
 
 configStruct config;
 
-#define DEBUG True
-
 // Uncomment/comment to turn on/off debug output messages.
-#define DEBUG_NOTICE
+// #define DEBUG_NOTICE
 // Uncomment/comment to turn on/off error output messages.
-#define DEBUG_ERROR
+// #define DEBUG_ERROR
 
 // Set where debug messages will be printed.
 #define DEBUG_PRINTER Serial
@@ -100,6 +100,7 @@ PubSubClient mqtt_client(esp_client);
 
 // semaphore to save config file
 bool proceed_and_save_configuration = false;
+unsigned long last_mqtt_attempt = 0;
 
 #define SENSORNAME "air_quality_meter"
 
@@ -131,6 +132,35 @@ void debug(String str)
 #endif // DEBUG
 }
 
+bool copy_config_value(JsonObject &json, const char *key, char *target, size_t target_size)
+{
+  const char *value = json.get<const char *>(key);
+  if (value == nullptr || value[0] == '\0')
+  {
+    return false;
+  }
+
+  strlcpy(target, value, target_size);
+  return true;
+}
+
+uint16_t parse_port(const char *value, uint16_t fallback)
+{
+  if (value == nullptr || value[0] == '\0')
+  {
+    return fallback;
+  }
+
+  char *end;
+  unsigned long parsed = strtoul(value, &end, 10);
+  if (*end != '\0' || parsed == 0 || parsed > 65535)
+  {
+    return fallback;
+  }
+
+  return static_cast<uint16_t>(parsed);
+}
+
 /**
  * let the configuration save process begin
  */
@@ -147,7 +177,7 @@ void unlock_save_config()
 void load_config()
 {
 
-  Serial.println("mounting FS..");
+  debug("mounting FS..");
   if (SPIFFS.begin())
   {
     debug("filesystem mounted");
@@ -165,17 +195,30 @@ void load_config()
          * allocate a buffer to store data inside the file
          */
         size_t size = configFile.size();
-        std::unique_ptr<char[]> buffer(new char[size]);
-        configFile.readBytes(buffer.get(), size);
+        if (size == 0 || size > 2048)
+        {
+          debug("config file has an invalid size");
+          configFile.close();
+          return;
+        }
+
+        std::unique_ptr<char[]> buffer(new char[size + 1]);
+        size_t bytes_read = configFile.readBytes(buffer.get(), size);
+        buffer[bytes_read] = '\0';
+        configFile.close();
+        if (bytes_read != size)
+        {
+          debug("unable to read config file");
+          return;
+        }
+
         DynamicJsonBuffer json_buffer;
         JsonObject &json = json_buffer.parseObject(buffer.get());
         if (json.success())
         {
           debug("json loaded");
-          json.printTo(Serial);
-
-          strlcpy(config.wifi_ssid, json.get<const char *>("wifi_ssid"), sizeof(config.wifi_ssid));
-          strlcpy(config.wifi_password, json.get<const char *>("wifi_password"), sizeof(config.wifi_password));
+          copy_config_value(json, "wifi_ssid", config.wifi_ssid, sizeof(config.wifi_ssid));
+          copy_config_value(json, "wifi_password", config.wifi_password, sizeof(config.wifi_password));
           if ((config.wifi_ssid[0] != '\0'))
           {
             WiFi.mode(WIFI_STA);
@@ -186,42 +229,15 @@ void load_config()
            * Safely-load configuration values from config.json (manages also 
            * undefined keys)
            */
-          if (json.get<const char *>("access_point_prefix")[0] != '\0')
-          {
-            strlcpy(config.access_point_prefix, json["access_point_prefix"], sizeof(config.access_point_prefix));
-          }
-          if (json.get<const char *>("access_point_password")[0] != '\0')
-          {
-            strlcpy(config.access_point_password, json["access_point_password"], sizeof(config.access_point_password));
-          }
-          if (json.get<const char *>("mqtt_server")[0] != '\0')
-          {
-            strlcpy(config.mqtt_server, json["mqtt_server"], sizeof(config.mqtt_server));
-          }
-          if (json.get<const char *>("mqtt_port")[0] != '\0')
-          {
-            strlcpy(config.mqtt_port, json["mqtt_port"], sizeof(config.mqtt_port));
-          }
-          if (json.get<const char *>("mqtt_username")[0] != '\0')
-          {
-            strlcpy(config.mqtt_username, json["mqtt_username"], sizeof(config.mqtt_username));
-          }
-          if (json.get<const char *>("mqtt_password")[0] != '\0')
-          {
-            strlcpy(config.mqtt_password, json["mqtt_password"], sizeof(config.mqtt_password));
-          }
-          if (json.get<const char *>("mqtt_topic")[0] != '\0')
-          {
-            strlcpy(config.mqtt_topic, json["mqtt_topic"], sizeof(config.mqtt_topic));
-          }
-          if (json.get<const char *>("ota_password")[0] != '\0')
-          {
-            strlcpy(config.ota_password, json["ota_password"], sizeof(config.ota_password));
-          }
-          if (json.get<const char *>("ota_port")[0] != '\0')
-          {
-            strlcpy(config.ota_port, json["ota_port"], sizeof(config.ota_port));
-          }
+          copy_config_value(json, "access_point_prefix", config.access_point_prefix, sizeof(config.access_point_prefix));
+          copy_config_value(json, "access_point_password", config.access_point_password, sizeof(config.access_point_password));
+          copy_config_value(json, "mqtt_server", config.mqtt_server, sizeof(config.mqtt_server));
+          copy_config_value(json, "mqtt_port", config.mqtt_port, sizeof(config.mqtt_port));
+          copy_config_value(json, "mqtt_username", config.mqtt_username, sizeof(config.mqtt_username));
+          copy_config_value(json, "mqtt_password", config.mqtt_password, sizeof(config.mqtt_password));
+          copy_config_value(json, "mqtt_topic", config.mqtt_topic, sizeof(config.mqtt_topic));
+          copy_config_value(json, "ota_password", config.ota_password, sizeof(config.ota_password));
+          copy_config_value(json, "ota_port", config.ota_port, sizeof(config.ota_port));
         }
         else
         {
@@ -241,18 +257,26 @@ void setup_wifi()
 {
   debug("Trying to connect to WiFi network");
   delay(200);
+
+  if (strlen(config.access_point_password) < 8)
+  {
+    randomSeed(ESP.getCycleCount() ^ ESP.getChipId() ^ micros());
+    snprintf(config.access_point_password, sizeof(config.access_point_password), "aqm-%08lx", static_cast<unsigned long>(random(0x7fffffff)));
+    Serial.printf("Configuration portal password: %s\n", config.access_point_password);
+  }
+
   wifi_manager.setSaveConfigCallback(unlock_save_config);
   wifi_manager.setAPCallback(config_mode_callback);
 
-  WiFiManagerParameter custom_access_point_prefix("access_point_prefix", "AP mode - SSID prefix", config.access_point_prefix, 25);
-  WiFiManagerParameter custom_access_point_password("access_point_password", "AP mode - password", config.access_point_password, 64);
-  WiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT server address", config.mqtt_server, 40);
-  WiFiManagerParameter custom_mqtt_port("mqtt_port", "MQTT server port", config.mqtt_port, 6);
-  WiFiManagerParameter custom_mqtt_username("mqtt_username", "MQTT username", config.mqtt_username, 6);
-  WiFiManagerParameter custom_mqtt_password("mqtt_password", "MQTT password", config.mqtt_password, 200);
-  WiFiManagerParameter custom_mqtt_topic("mqtt_topic", "MQTT topic", config.mqtt_topic, 200);
-  WiFiManagerParameter custom_ota_password("ota_password", "OTA password", config.ota_password, 200);
-  WiFiManagerParameter custom_ota_port("ota_port", "OTA port", config.ota_port, 200);
+  WiFiManagerParameter custom_access_point_prefix("access_point_prefix", "AP mode - SSID prefix", config.access_point_prefix, sizeof(config.access_point_prefix) - 1);
+  WiFiManagerParameter custom_access_point_password("access_point_password", "AP mode - password", config.access_point_password, sizeof(config.access_point_password) - 1);
+  WiFiManagerParameter custom_mqtt_server("mqtt_server", "MQTT server address", config.mqtt_server, sizeof(config.mqtt_server) - 1);
+  WiFiManagerParameter custom_mqtt_port("mqtt_port", "MQTT server port", config.mqtt_port, sizeof(config.mqtt_port) - 1);
+  WiFiManagerParameter custom_mqtt_username("mqtt_username", "MQTT username", config.mqtt_username, sizeof(config.mqtt_username) - 1);
+  WiFiManagerParameter custom_mqtt_password("mqtt_password", "MQTT password", config.mqtt_password, sizeof(config.mqtt_password) - 1);
+  WiFiManagerParameter custom_mqtt_topic("mqtt_topic", "MQTT topic", config.mqtt_topic, sizeof(config.mqtt_topic) - 1);
+  WiFiManagerParameter custom_ota_password("ota_password", "OTA password", config.ota_password, sizeof(config.ota_password) - 1);
+  WiFiManagerParameter custom_ota_port("ota_port", "OTA port", config.ota_port, sizeof(config.ota_port) - 1);
 
   wifi_manager.addParameter(&custom_access_point_prefix);
   wifi_manager.addParameter(&custom_access_point_password);
@@ -330,33 +354,46 @@ void setup_wifi()
  */
 void setup_arduino_ota()
 {
-  uint16_t port;
-  sscanf(config.ota_port, "%d", &port);
+  if (strlen(config.ota_password) < 8)
+  {
+    debug("OTA disabled: configure a password of at least 8 characters");
+    return;
+  }
+
+  uint16_t port = parse_port(config.ota_port, 8266);
   ArduinoOTA.setPort(port);
-  ArduinoOTA.setHostname(SENSORNAME);
+  String hostname = String(SENSORNAME) + "-" + String(ESP.getChipId(), HEX);
+  ArduinoOTA.setHostname(hostname.c_str());
   ArduinoOTA.setPassword(config.ota_password);
 
   ArduinoOTA.onStart([]() {
-    Serial.println("Starting OTA");
+    debug("Starting OTA");
   });
   ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd OTA");
+    debug("OTA complete");
   });
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    if (total > 0)
+    {
+      DEBUG_PRINT("Progress: ");
+      DEBUG_PRINT((progress * 100) / total);
+      DEBUG_PRINTLN("%");
+    }
   });
   ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
+    DEBUG_PRINT("OTA Error[");
+    DEBUG_PRINT(error);
+    DEBUG_PRINT("]: ");
     if (error == OTA_AUTH_ERROR)
-      Serial.println("Auth Failed");
+      DEBUG_PRINTLN("Auth Failed");
     else if (error == OTA_BEGIN_ERROR)
-      Serial.println("Begin Failed");
+      DEBUG_PRINTLN("Begin Failed");
     else if (error == OTA_CONNECT_ERROR)
-      Serial.println("Connect Failed");
+      DEBUG_PRINTLN("Connect Failed");
     else if (error == OTA_RECEIVE_ERROR)
-      Serial.println("Receive Failed");
+      DEBUG_PRINTLN("Receive Failed");
     else if (error == OTA_END_ERROR)
-      Serial.println("End Failed");
+      DEBUG_PRINTLN("End Failed");
   });
   ArduinoOTA.begin();
 }
@@ -473,7 +510,11 @@ boolean has_pms_data(Stream *stream)
   sum += (uint16_t)PMS5003ST_SIG1 + (uint16_t)PMS5003ST_SIG2;
   sum += (uint16_t)framelen_low + (uint16_t)framelen_high;
 
-  stream->readBytes(buffer, framelen);
+  if (stream->readBytes(buffer, framelen) != framelen)
+  {
+    ERROR_PRINTLN("PMS5003ST : incomplete frame");
+    return false;
+  }
   // get checksum ready (framelen - 16bit checksum)
   for (uint8_t i = 0; i < (framelen - 2); i++)
   {
@@ -520,8 +561,7 @@ boolean has_pms_data(Stream *stream)
  */
 void setup_mqtt_client()
 {
-  uint16_t port;
-  sscanf(config.mqtt_port, "%d", &port);
+  uint16_t port = parse_port(config.mqtt_port, 1883);
   debug("mqtt server: " + String(config.mqtt_server) + " - port: " + String(port));
   mqtt_client.setServer(config.mqtt_server, port);
 }
@@ -531,29 +571,21 @@ void setup_mqtt_client()
  */
 void reconnect()
 {
-  // Loop until we're reconnected
-  while (!mqtt_client.connected())
+  const unsigned long retry_interval = 5000;
+  if (mqtt_client.connected() || millis() - last_mqtt_attempt < retry_interval)
   {
-    Serial.print("username : '");
-    Serial.print(config.mqtt_username);
-    Serial.print("' - pass: '");
-    Serial.print(config.mqtt_password);
-    Serial.println("'");
-    Serial.print("Attempting MQTT connection...");
-    // Attempt to connect
-    String sensorname = config.access_point_prefix + String(ESP.getChipId(), HEX);
-    if (mqtt_client.connect(sensorname.c_str(), config.mqtt_username, config.mqtt_password))
-    {
-      Serial.println("connected");
-    }
-    else
-    {
-      Serial.print("failed, rc=");
-      Serial.print(mqtt_client.state());
-      Serial.println(" try again in 5 seconds");
-      // Wait 5 seconds before retrying
-      delay(5000);
-    }
+    return;
+  }
+
+  last_mqtt_attempt = millis();
+  String sensorname = String(SENSORNAME) + "-" + String(ESP.getChipId(), HEX);
+  if (mqtt_client.connect(sensorname.c_str(), config.mqtt_username, config.mqtt_password))
+  {
+    debug("MQTT connected");
+  }
+  else
+  {
+    debug("MQTT connection failed, rc=" + String(mqtt_client.state()));
   }
 }
 
@@ -609,9 +641,7 @@ void publishDatas(JsonObject &datas)
 void setup()
 {
   pms_serial.begin(9600);
-#ifdef DEBUG
   Serial.begin(115200);
-#endif
   delay(1000);
 
   // uncomment to reset ESP8266
@@ -622,6 +652,7 @@ void setup()
   load_config();
   setup_wifi();
   setup_mqtt_client();
+  setup_arduino_ota();
 }
 
 void loop()
