@@ -11,8 +11,7 @@ cache:
   - "~/.platformio"
 
 install:
-  - pip install -U https://github.com/platformio/platformio-core/archive/develop.zip
-  - platformio update
+  - pip install platformio==6.2.0
 
 script:
   - platformio run
