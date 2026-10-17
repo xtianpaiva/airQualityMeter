@@ -9,7 +9,8 @@
 #include <SoftwareSerial.h>
 #include <ArduinoJson.h>
 #include <memory>
-#include <stdlib.h>
+
+#include "config_utils.h"
 
 /*
  * Modify this file to preload default configuration!
@@ -142,23 +143,6 @@ bool copy_config_value(JsonObject &json, const char *key, char *target, size_t t
 
   strlcpy(target, value, target_size);
   return true;
-}
-
-uint16_t parse_port(const char *value, uint16_t fallback)
-{
-  if (value == nullptr || value[0] == '\0')
-  {
-    return fallback;
-  }
-
-  char *end;
-  unsigned long parsed = strtoul(value, &end, 10);
-  if (*end != '\0' || parsed == 0 || parsed > 65535)
-  {
-    return fallback;
-  }
-
-  return static_cast<uint16_t>(parsed);
 }
 
 /**
