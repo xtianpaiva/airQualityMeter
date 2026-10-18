@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "config_utils.h"
+#include "pms7003_frame.h"
 
 /*
  * Modify this file to preload default configuration!
@@ -108,22 +109,7 @@ unsigned long last_mqtt_attempt = 0;
 #define HTTP_PORT 80
 ESP8266WebServer server(HTTP_PORT);
 
-#define PMS5003ST_SIZE 40
-#define PMS5003ST_SIG1 0X42
-#define PMS5003ST_SIG2 0X4d
-
-struct pms5003STdata
-{
-  uint16_t pm10_standard, pm25_standard, pm100_standard;
-  uint16_t pm10_env, pm25_env, pm100_env;
-  uint16_t particles_03um, particles_05um, particles_10um, particles_25um, particles_50um, particles_100um;
-  uint16_t hcho, temperature, humidity;
-  uint16_t reserved;
-  uint16_t unused;
-  uint16_t checksum;
-};
-
-struct pms5003STdata pms_data;
+pms7003data pms_data;
 
 void debug(String str)
 {
@@ -382,7 +368,7 @@ void setup_arduino_ota()
   ArduinoOTA.begin();
 }
 
-JsonObject &to_json(pms5003STdata data)
+JsonObject &to_json(const pms7003data &data)
 {
   StaticJsonBuffer<1024> json_buffer;
   JsonObject &json_data = json_buffer.createObject();
@@ -402,13 +388,11 @@ JsonObject &to_json(pms5003STdata data)
   json_data["pt50"] = data.particles_50um;
   json_data["pt100"] = data.particles_100um;
 
-  json_data["hcho"] = float(data.hcho / 1000.0);
-  json_data["tem"] = float(data.temperature / 10.0);
-  json_data["hum"] = float(data.humidity / 10.0);
+  json_data["sensor_version"] = data.version;
   return json_data;
 }
 
-boolean publish_data(pms5003STdata &pms_data)
+boolean publish_data(const pms7003data &pms_data)
 {
   DEBUG_PRINTLN("Prepare json object");
   JsonObject &data = to_json(pms_data);
@@ -432,107 +416,66 @@ boolean has_pms_data(Stream *stream)
    * Fastly flush characters from Serial buffer while waiting for start message
    * delimiters
    */
-  if (bytes_to_read < PMS5003ST_SIZE)
+  if (bytes_to_read < PMS7003_FRAME_SIZE)
   {
     if (bytes_to_read)
     {
-      while (bytes_to_read-- && stream->peek() != PMS5003ST_SIG1)
+      while (bytes_to_read-- && stream->peek() != 0x42)
       {
         // flush invalid chars
         buffer_char = stream->read();
         DEBUG_PRINT("skip char 0x");
         DEBUG_PRINTLN(buffer_char, HEX);
       }
-      /*if(stream->peek() == PMS5003ST_SIG1){ 
-        DEBUG_PRINTLN("buffer ready!"); 
-      }
-      else { 
-        DEBUG_PRINTLN("buffer empty!"); 
-      }*/
     }
     delay(50);
     return false;
   }
 
-  buffer_char = stream->read();
-  //DEBUG_PRINT("0x"); DEBUG_PRINT(buffer_char, HEX); DEBUG_PRINTLN(); return false;
-
-  // Read a byte at a time until we get to the special '0x42' start-byte
-  //uint8_t buffer_char = stream->read();
-
-  if (buffer_char != PMS5003ST_SIG1)
+  uint8_t frame[PMS7003_FRAME_SIZE];
+  frame[0] = stream->read();
+  if (frame[0] != 0x42)
   {
     ERROR_PRINT("[1] skip char 0x");
-    ERROR_PRINTLN(buffer_char, HEX);
+    ERROR_PRINTLN(frame[0], HEX);
     return false;
   }
   DEBUG_PRINTLN("found start char");
 
-  buffer_char = stream->read();
-  if (buffer_char != PMS5003ST_SIG2)
+  frame[1] = stream->read();
+  if (frame[1] != 0x4D)
   {
     ERROR_PRINT("[2] next char is not SIG2, skip 0x");
-    ERROR_PRINTLN(buffer_char, HEX);
+    ERROR_PRINTLN(frame[1], HEX);
     return false;
   }
   DEBUG_PRINTLN("found second char");
 
-  uint8_t framelen_high = stream->read();
-  uint8_t framelen_low = stream->read();
-  uint16_t framelen = framelen_low | framelen_high << 8;
-
-  if (framelen != (PMS5003ST_SIZE - 4))
+  if (stream->readBytes(frame + 2, PMS7003_FRAME_SIZE - 2) != PMS7003_FRAME_SIZE - 2)
   {
-    ERROR_PRINT("PMS5003ST : invalid framelength - ");
-    ERROR_PRINTLN(framelen, DEC);
+    ERROR_PRINTLN("PMS7003 : incomplete frame");
     return false;
-  }
-  DEBUG_PRINTLN("Framelen OK"); //DEBUG_PRINTLN(framelen, DEC);
-
-  uint8_t buffer[framelen];
-  uint16_t sum = 0;
-  sum += (uint16_t)PMS5003ST_SIG1 + (uint16_t)PMS5003ST_SIG2;
-  sum += (uint16_t)framelen_low + (uint16_t)framelen_high;
-
-  if (stream->readBytes(buffer, framelen) != framelen)
-  {
-    ERROR_PRINTLN("PMS5003ST : incomplete frame");
-    return false;
-  }
-  // get checksum ready (framelen - 16bit checksum)
-  for (uint8_t i = 0; i < (framelen - 2); i++)
-  {
-    sum += (uint16_t)buffer[i];
   }
 
   /* debugging */
   DEBUG_PRINT("FRAME: ");
-  for (uint8_t i = 0; i < framelen; i++)
+  for (uint8_t i = 0; i < PMS7003_FRAME_SIZE; i++)
   {
     DEBUG_PRINT("0x");
-    DEBUG_PRINT(buffer[i], HEX);
+    DEBUG_PRINT(frame[i], HEX);
     DEBUG_PRINT(", ");
   }
   DEBUG_PRINTLN();
 
-  // The data comes in big endians
-  int buffer_u16_length = framelen / 2;
-  uint16_t buffer_u16[buffer_u16_length];
-  for (uint8_t i = 0; i < buffer_u16_length; i++)
+  if (!parse_pms7003_frame(frame, sizeof(frame), pms_data))
   {
-    buffer_u16[i] = buffer[i * 2 + 1] | (buffer[i * 2] << 8);
+    ERROR_PRINTLN("PMS7003 : invalid frame");
+    return false;
   }
-  //DEBUG_PRINTLN("buffer16 OK");
-  //return false;
-
-  // put it into a nice struct :)
-  memcpy((void *)&pms_data, (void *)buffer_u16, sizeof(pms_data));
-  //DEBUG_PRINTLN("Struct OK");
-
-  if (sum != pms_data.checksum)
+  if (pms_data.error != 0)
   {
-    ERROR_PRINTLN("Checksum failure");
-    //DEBUG_PRINTLN("Sum: "+ String(sum) + " - check: "+ String(pms_data.checksum));
+    ERROR_PRINT("PMS7003 error code: ");
+    ERROR_PRINTLN(pms_data.error);
     return false;
   }
   DEBUG_PRINTLN("Checksum OK");
@@ -573,7 +516,7 @@ void reconnect()
   }
 }
 
-void print_pms_data(pms5003STdata data)
+void print_pms_data(const pms7003data &data)
 {
   DEBUG_PRINTLN("---------------------------------------");
   DEBUG_PRINTLN("Concentration Units (standard)");
@@ -605,12 +548,8 @@ void print_pms_data(pms5003STdata data)
   DEBUG_PRINT("Particles > 10.0 um / 0.1L air:");
   DEBUG_PRINTLN(data.particles_100um);
   DEBUG_PRINTLN("---------------------------------------");
-  DEBUG_PRINT("HCHO: ");
-  DEBUG_PRINTLN(float(data.hcho / 1000.0), 4);
-  DEBUG_PRINT("Temperature: ");
-  DEBUG_PRINTLN(float(data.temperature / 10.), 2);
-  DEBUG_PRINT("Humidity: ");
-  DEBUG_PRINTLN(float(data.humidity / 10.0), 2);
+  DEBUG_PRINT("Sensor version: ");
+  DEBUG_PRINTLN(data.version);
   DEBUG_PRINTLN("---------------------------------------");
 }
 
