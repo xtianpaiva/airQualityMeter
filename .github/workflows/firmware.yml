@@ -1,0 +1,45 @@
+name: Firmware CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio
+          key: ${{ runner.os }}-platformio-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio==6.2.0
+
+      - name: Run native tests
+        run: pio test -e native
+
+      - name: Build ESP8266 firmware
+        run: pio run -e nodemcuv2
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: air-quality-meter-firmware
+          path: |
+            .pio/build/nodemcuv2/firmware.bin
+            .pio/build/nodemcuv2/firmware.elf
