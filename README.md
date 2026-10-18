@@ -2,7 +2,7 @@
 > "There's so much pollution in the air now that if it weren't for our lungs there'd be no place to put it all."
 > \- Robert Orben
  
-Detects **air particulate matter** (PM - pm1, pm2.5, pm10) concentrations with a **Plantower PMS5003ST** sensor and sends data to an **MQTT topic**. 
+Detects **air particulate matter** (PM - pm1, pm2.5, pm10) concentrations with a **Plantower PMS7003** sensor and sends data to an **MQTT topic**.
 
 An alternative firmware for _ESP8266 devices_ like the [NodeMCU](https://github.com/nodemcu/nodemcu-firmware) board written for [**Arduino**](https://www.arduino.cc/) on [**PlatformIO**](https://platformio.org/)
 
@@ -21,13 +21,11 @@ It's very affordable (you can buy _them_ for a few bucks) and you can develop cu
 
 [NodeMCU on Wikipedia](https://en.wikipedia.org/wiki/NodeMCU)
 
-### Plantower PMS5003ST
+### Plantower PMS7003
 A **digital particle concentration sensor** that count the number of suspended particles in the air using a laser and the scattering principle and output them as digital data.
 It's not expensive and you can find it on almost every marketplace like AliExpress.
 
-The **ST version** that I used works differently from the **PMS5003** standard because has also a formaldehyde, temperature and humidity sensor so it needs to transfer more data.
-
-![plantower 5003ST](resources/pms5003st.png)
+The PMS7003 reports particle concentrations and particle counts. It does not measure formaldehyde, temperature or humidity.
 
 ## Installing / Getting started
 
@@ -78,7 +76,7 @@ pio test -e native
 pio run
 ```
 
-The native tests cover port parsing and reject empty, malformed, zero and out-of-range values. The firmware build still requires a compatible ESP8266 toolchain; deploy it only after a successful build.
+The native tests cover port parsing and PMS7003 frame parsing, including checksum validation. The firmware build still requires a compatible ESP8266 toolchain; deploy it only after a successful build.
 
 ## Usage
 
@@ -126,9 +124,7 @@ homeassistant:
         - pt25
         - pt50
         - pt100
-        - hcho
-        - tem
-        - hum
+        - sensor_version
 
     - platform: template
       sensors:
@@ -176,18 +172,6 @@ homeassistant:
           friendly_name: Particles > 10.0um / 0.1L air
           value_template: '{{ states.sensor.air_quality_meter.attributes.pt100 }}'        
 
-        air_quality_temperature:
-          friendly_name: Temperature
-          value_template: '{{ states.sensor.air_quality_meter.attributes.tem }}'
-          unit_of_measurement: '°C'  
-        air_quality_humidity:
-          friendly_name: Humidity
-          value_template: '{{ states.sensor.air_quality_meter.attributes.hum }}'
-          unit_of_measurement: '%'       
-        air_quality_formaldehyde:
-          friendly_name: Formaldehyde
-          value_template: '{{ states.sensor.air_quality_meter.attributes.hcho }}'
-          unit_of_measurement: 'mg/m3'
 ```
 
 and this is an example Lovelace UI view:
@@ -235,15 +219,6 @@ views:
         - name: "> 10.0μg"
           entity: sensor.air_quality_pt100           
         
-    - type: entities
-      title: Others
-      show_header_toggle: false
-      entities:
-        - sensor.air_quality_formaldehyde
-        - sensor.air_quality_temperature
-        - entity: sensor.air_quality_humidity
-          icon: mdi:water-percent
-     
     - type: history-graph
       title: 'Concentration Units (standard)'
       entities:
