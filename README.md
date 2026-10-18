@@ -76,7 +76,7 @@ pio test -e native
 pio run
 ```
 
-The native tests cover port parsing and PMS7003 frame parsing, including checksum validation. The firmware build still requires a compatible ESP8266 toolchain; deploy it only after a successful build.
+The native tests cover port parsing, PMS7003 frame parsing and the Home Assistant discovery registry. The firmware build still requires a compatible ESP8266 toolchain; deploy it only after a successful build.
 
 ## Usage
 
@@ -98,6 +98,10 @@ This are the minimal wiring that this project needs:
 | 8 (NC)|  | <span style="color:red">red</span> |
 
 ## (extra) HomeAssistant
+
+The firmware uses MQTT discovery with the standard `homeassistant` discovery prefix. When it connects to the broker, Home Assistant automatically creates 12 entities for PM concentrations and particle counts, groups them under one device and tracks its MQTT availability. No YAML configuration is required.
+
+The configured `mqtt_topic` remains the state topic. The firmware publishes `online` and `offline` status to `<mqtt_topic>/availability`. Discovery configuration messages are retained, while measurement values are not retained.
 
 I personally collect all these data on my **HomeAssistant** instance. It's an opensource home automation software that runs perfectly on micropc like **RaspberryPI** or local servers (NAS, nuc, etc)
 
