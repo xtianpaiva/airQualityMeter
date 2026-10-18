@@ -11,6 +11,7 @@
 #include <memory>
 
 #include "config_utils.h"
+#include "homeassistant_discovery.h"
 #include "pms7003_frame.h"
 
 /*
@@ -105,6 +106,7 @@ bool proceed_and_save_configuration = false;
 unsigned long last_mqtt_attempt = 0;
 
 #define SENSORNAME "air_quality_meter"
+#define FIRMWARE_VERSION "2.0.0"
 
 #define HTTP_PORT 80
 ESP8266WebServer server(HTTP_PORT);
@@ -493,6 +495,77 @@ void setup_mqtt_client()
   mqtt_client.setServer(config.mqtt_server, port);
 }
 
+void availability_topic(char *topic, size_t topic_size)
+{
+  snprintf(topic, topic_size, "%s/availability", config.mqtt_topic);
+}
+
+bool publish_homeassistant_discovery_sensor(const char *device_id, const char *availability, const homeassistant_sensor &sensor)
+{
+  char discovery_topic[128];
+  snprintf(discovery_topic, sizeof(discovery_topic), "homeassistant/sensor/%s/%s/config", device_id, sensor.object_id);
+
+  char unique_id[80];
+  snprintf(unique_id, sizeof(unique_id), "%s_%s", device_id, sensor.object_id);
+
+  char value_template[64];
+  snprintf(value_template, sizeof(value_template), "{{ value_json.%s }}", sensor.json_key);
+
+  char device_name[80];
+  snprintf(device_name, sizeof(device_name), "Air Quality Meter %06X", ESP.getChipId());
+
+  StaticJsonBuffer<768> json_buffer;
+  JsonObject &payload = json_buffer.createObject();
+  payload["name"] = sensor.name;
+  payload["unique_id"] = unique_id;
+  payload["state_topic"] = config.mqtt_topic;
+  payload["value_template"] = value_template;
+  payload["unit_of_measurement"] = sensor.unit;
+  payload["state_class"] = "measurement";
+  payload["availability_topic"] = availability;
+  payload["payload_available"] = "online";
+  payload["payload_not_available"] = "offline";
+  if (sensor.device_class != nullptr)
+  {
+    payload["device_class"] = sensor.device_class;
+  }
+
+  JsonObject &device = payload.createNestedObject("device");
+  JsonArray &identifiers = device.createNestedArray("identifiers");
+  identifiers.add(device_id);
+  device["name"] = device_name;
+  device["manufacturer"] = "airQualityMeter";
+  device["model"] = "ESP8266 + PMS7003";
+  device["sw_version"] = FIRMWARE_VERSION;
+
+  size_t payload_size = payload.measureLength() + 1;
+  if (payload_size + strlen(discovery_topic) + 10 > MQTT_MAX_PACKET_SIZE)
+  {
+    debug("Home Assistant discovery message is too large");
+    return false;
+  }
+
+  char message[1024];
+  payload.printTo(message, sizeof(message));
+  return mqtt_client.publish(discovery_topic, message, true);
+}
+
+bool publish_homeassistant_discovery(const char *availability)
+{
+  char device_id[40];
+  snprintf(device_id, sizeof(device_id), "%s_%06X", SENSORNAME, ESP.getChipId());
+
+  bool published = true;
+  for (size_t index = 0; index < homeassistant_sensor_count; index++)
+  {
+    if (!publish_homeassistant_discovery_sensor(device_id, availability, homeassistant_sensors[index]))
+    {
+      published = false;
+    }
+  }
+  return published;
+}
+
 /**
  * Reconnects MQTT client
  */
@@ -506,9 +579,16 @@ void reconnect()
 
   last_mqtt_attempt = millis();
   String sensorname = String(SENSORNAME) + "-" + String(ESP.getChipId(), HEX);
-  if (mqtt_client.connect(sensorname.c_str(), config.mqtt_username, config.mqtt_password))
+  char availability[220];
+  availability_topic(availability, sizeof(availability));
+  if (mqtt_client.connect(sensorname.c_str(), config.mqtt_username, config.mqtt_password, availability, 0, true, "offline"))
   {
     debug("MQTT connected");
+    mqtt_client.publish(availability, "online", true);
+    if (!publish_homeassistant_discovery(availability))
+    {
+      debug("Home Assistant discovery failed");
+    }
   }
   else
   {
